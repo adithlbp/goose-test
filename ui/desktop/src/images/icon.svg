@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg width="2048" height="2048" viewBox="0 0 2048 2048" xmlns="http://www.w3.org/2000/svg">
+    <!-- Rounded rectangle background - Coppel Blue -->
+    <rect x="200" y="200" width="1648" height="1648" rx="400" ry="400" fill="#1C42E8" stroke="none"/>
+
+    <!-- Genius Assistant brand mark: three descending dots - Coppel Yellow -->
+    <circle cx="760" cy="1024" r="230" fill="#F0D224"/>
+    <circle cx="1150" cy="1024" r="170" fill="#F0D224"/>
+    <circle cx="1470" cy="1024" r="125" fill="#F0D224"/>
+</svg>

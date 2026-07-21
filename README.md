@@ -61,4 +61,3 @@ curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download
 - [YouTube](https://www.youtube.com/@goose-oss)
 - [LinkedIn](https://www.linkedin.com/company/goose-oss)
 - [Twitter/X](https://x.com/goose_oss)
-# goose-test
