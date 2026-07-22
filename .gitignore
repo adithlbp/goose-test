@@ -95,3 +95,10 @@ gooseselftest/
 /crates/goose-sdk/examples/uniffi/kotlin/.gradle/
 /crates/goose-sdk/examples/uniffi/kotlin/.kotlin/
 /crates/goose-sdk/examples/uniffi/kotlin/build/
+
+# Token corporativo ofuscado — NUNCA versionar (ninguna copia, en ninguna ruta)
+installer/genius_token.enc
+**/genius_token.enc
+
+# Paquetes de testers — artefactos generados (se regeneran con package_for_testers.sh)
+dist-testers/

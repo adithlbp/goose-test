@@ -10,8 +10,8 @@
 ##############################################################################
 
 # --- Provider corporativo fijo (valores del piloto) ---
-export GOOSE_CUSTOM_PROVIDER='{"display_name":"Genius","api_url":"https://api.genius.coppel.services","models":["gemini-3.1-pro-preview"]}'
-export GOOSE_DEFAULT_MODEL="gemini-3.1-pro-preview"
+export GOOSE_CUSTOM_PROVIDER='{"display_name":"Genius","api_url":"https://api.genius.coppel.services","models":["gemini-3.5-flash"]}'
+export GOOSE_DEFAULT_MODEL="gemini-3.5-flash"
 
 # Red de seguridad del fallback: id canónico del provider "Genius"
 # (declarative_providers.rs::generate_id → custom_<slug>). Solo se usa si el

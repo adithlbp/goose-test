@@ -249,10 +249,55 @@ Precedencia env-first de `Config::get_param/get_secret` (upstream). No se tocó.
   probado que goose añade `/v1/models` solo; con o sin `/v1` resuelve igual.
 - Requiere gateway alcanzable (VPN). Sin red, cae limpio a la lista estática.
 
+## Adenda 2026-07-21 — instalables generados, gate re-encuadrado y token embebido
+
+> Corrige afirmaciones de los prompts 07/08 arriba (gate por firma, token por env,
+> `provision_secret.py` "sin cambios"). El estado vigente es este.
+
+- **Gate del provisioning re-encuadrado (corrige `:168`)**: ya **no** se gatea por
+  `GENIUS_SIGNING_READY`. `install_genius.sh` verifica el **hash del build bendecido**
+  (`frozen_goose_darwin_{arm64,x64}.sha256`, generados por `build_corporate.sh`); el
+  binario instalado debe coincidir con **alguno**. Escape hatch
+  `GENIUS_ALLOW_UNVERIFIED=true`. En Windows se quitó el gate (CredMan sin ACL por-hash).
+- **Token embebido ofuscado (corrige `:170`)**: por defecto viene en
+  `genius_token.enc` (junto al instalador), no por `GENIUS_TOKEN` env (que ahora es
+  solo para pruebas). `embed_token.py` (dueño del token, stdin) + `genius_token_codec.py`
+  (SHA256-keystream XOR + HMAC, stdlib) + `provision_secret.py --token-enc` (decode
+  in-memory). Ofuscación, no cifrado — riesgo aceptado (SECRET_LIFECYCLE §2.1).
+- **`provision_secret.py` ya NO es copia exacta del spike (corrige `:153`)**: añade
+  `--token-enc` y **redacta** el token en el log del upsert (antes lo imprimía en claro).
+- **Build multi-arch**: `build_corporate.sh [arm64|x64]` + `corporate_env.sh` (política
+  única). Generados y verificados: `Genius Assistant.zip` (arm64, 188 MB) y
+  `Genius Assistant_intel_mac.zip` (x64, 205 MB). Intel usa el binario oficial x86_64
+  v1.43.0 (descargado, no compilado). Config horneada verificada en ambos `app.asar`.
+- **Handoff Windows**: `build_corporate_windows.sh` (Git Bash) + workflow de CI. El
+  app bundle no lleva token → seguro compartir el repo con quien compila.
+
+## Adenda 2026-07-21b — provisioning sin Python y `~/Applications`
+
+> Feedback del piloto: (1) `ditto: /Applications: Operation not permitted` en Macs
+> corporativas; (2) muchos usuarios no tienen Python. Ambos resueltos.
+
+- **Instalación en `~/Applications`** (no `/Applications`): evita el EPERM por TCC/
+  permisos de admin en Macs gestionadas. La ACL del Keychain sigue atada al hash del
+  binario, no a la ruta → sin efecto en el gate I5.
+- **Provisioning nativo, sin Python** — se eliminaron `provision_secret.py`,
+  `genius_token_codec.py`, `embed_token.py`:
+  - **Descifrado**: `openssl` (macOS, nativo) / `.NET Aes` (Windows PowerShell, nativo).
+  - **Guardado**: se maneja `goose acp` (JSON-RPC) por pipe — bash con FIFO + kill,
+    PowerShell con `System.Diagnostics.Process` + stdin. `goose` no tiene comando CLI
+    de secreto (`goose --help` solo expone `configure`/`acp`/…), así que el ACP sigue
+    siendo la vía oficial; solo cambió el cliente (shell nativo en vez de Python).
+  - **Formato del blob**: `genius_token.enc` pasó de XOR+HMAC (Python) a
+    `keyhex:ivhex:ct_b64` **AES-256-CBC** (openssl ⇄ .NET compatibles). Generado por
+    `embed_token.sh`. Sigue siendo ofuscación (riesgo aceptado, §2.1).
+- **Verificado end-to-end en macOS** (HOME aislado + `GOOSE_DISABLE_KEYRING`): embed →
+  decode (openssl) → upsert por pipe → secreto guardado idéntico al original.
+
 ## Pendientes globales
 
-- [ ] Decisión Developer ID / cert Windows → desbloquea 07 + gate del 08 + `osxSign`/`osxNotarize` en `forge.config.ts` + prueba build-A→build-B firmados.
+- [ ] Decisión Developer ID (macOS) → firma estable + `osxSign`/`osxNotarize` (ya gated tras `APPLE_TEAM_ID`) + prueba build-A→build-B firmados. **Nota**: el gate del 08 ya NO depende de esto (se re-encuadró al hash I5, ver adenda 2026-07-21).
 - [ ] `pnpm run start-gui` — verificación visual (branding, locks, toggle seguridad).
 - [ ] E2E en VM limpia contra gateway real (onboarding saltado, chat autenticado, model picker con `/v1/models`).
 - [ ] Validar `install_genius.ps1` en Windows/pwsh.
-- [ ] Receta de build corporativo (CI): exportar `GOOSE_CUSTOM_PROVIDER='{"display_name":"Genius",...}'`, `GOOSE_DEFAULT_MODEL`, `GOOSE_LOCK_BACKEND=1`, `GOOSE_LOCK_PROVIDER=1`, `SECURITY_PROMPT_ENABLED_OVERRIDE=true` antes de `pnpm run make`.
+- [x] Receta de build corporativo: **hecha** — `installer/corporate_env.sh` (política única) + `build_corporate.sh [arm64|x64]` (macOS) + `build_corporate_windows.sh`/workflow (Windows). Ver adenda 2026-07-21.

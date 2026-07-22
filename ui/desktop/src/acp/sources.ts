@@ -38,6 +38,36 @@ export async function createGlobalSkill(
   });
   return source;
 }
+
+/**
+ * Update an existing skill's description/content in place. `path` identifies
+ * the skill on disk (from its `SourceEntry.path`); `properties` is omitted so
+ * per-skill metadata isn't silently erased.
+ */
+export async function updateGlobalSkill(
+  path: string,
+  name: string,
+  description: string,
+  content: string
+): Promise<SourceEntry> {
+  const client = await getAcpClient();
+  const { source } = await client.goose.sourcesUpdate_unstable({
+    type: 'skill',
+    path,
+    name,
+    description,
+    content,
+  });
+  return source;
+}
+
+/**
+ * Delete a skill and its on-disk directory by `path` (from `SourceEntry.path`).
+ */
+export async function deleteGlobalSkill(path: string): Promise<void> {
+  const client = await getAcpClient();
+  await client.goose.sourcesDelete_unstable({ type: 'skill', path });
+}
 const inFlightSkillSourceLoads = new Map<string, Promise<SourceEntry[]>>();
 
 export async function listSkillSources(projectDir: string): Promise<SourceEntry[]> {

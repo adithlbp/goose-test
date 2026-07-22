@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Zap, AlertCircle, Plus } from 'lucide-react';
+import type { SourceEntry } from '@aaif/goose-sdk';
+import { Zap, AlertCircle, Plus, Lock, Trash2 } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
 import { Card } from '../ui/card';
 import { Button } from '../ui/button';
@@ -12,7 +13,13 @@ import { getInitialWorkingDir } from '../../utils/workingDir';
 import { defineMessages, useIntl } from '../../i18n';
 import { SearchView } from '../conversation/SearchView';
 import { getSearchShortcutText } from '../../utils/keyboardShortcuts';
-import { listSkillSources, createGlobalSkill, skillNameFromTitle } from '../../acp/sources';
+import {
+  listSkillSources,
+  createGlobalSkill,
+  updateGlobalSkill,
+  deleteGlobalSkill,
+  skillNameFromTitle,
+} from '../../acp/sources';
 import { toastError, toastSuccess } from '../../toasts';
 
 const i18n = defineMessages({
@@ -124,16 +131,74 @@ const i18n = defineMessages({
     id: 'skillsView.createFailed',
     defaultMessage: 'Could not save the skill',
   },
+  editTitle: {
+    id: 'skillsView.editTitle',
+    defaultMessage: 'Edit Skill',
+  },
+  editIntro: {
+    id: 'skillsView.editIntro',
+    defaultMessage: 'Update when to use this skill and its instructions.',
+  },
+  fieldNameReadonlyHint: {
+    id: 'skillsView.fieldNameReadonlyHint',
+    defaultMessage: "The name can't be changed after a skill is created.",
+  },
+  saveChanges: {
+    id: 'skillsView.saveChanges',
+    defaultMessage: 'Save Changes',
+  },
+  updatedTitle: {
+    id: 'skillsView.updatedTitle',
+    defaultMessage: 'Skill updated',
+  },
+  updatedMsg: {
+    id: 'skillsView.updatedMsg',
+    defaultMessage: '"{name}" has been updated.',
+  },
+  updateFailed: {
+    id: 'skillsView.updateFailed',
+    defaultMessage: 'Could not update the skill',
+  },
+  readOnlySkill: {
+    id: 'skillsView.readOnlySkill',
+    defaultMessage: 'Read-only',
+  },
+  deleteSkill: {
+    id: 'skillsView.deleteSkill',
+    defaultMessage: 'Delete',
+  },
+  deleteConfirm: {
+    id: 'skillsView.deleteConfirm',
+    defaultMessage: 'Delete this skill? This cannot be undone.',
+  },
+  deleting: {
+    id: 'skillsView.deleting',
+    defaultMessage: 'Deleting...',
+  },
+  deletedTitle: {
+    id: 'skillsView.deletedTitle',
+    defaultMessage: 'Skill deleted',
+  },
+  deletedMsg: {
+    id: 'skillsView.deletedMsg',
+    defaultMessage: '"{name}" has been removed.',
+  },
+  deleteFailed: {
+    id: 'skillsView.deleteFailed',
+    defaultMessage: 'Could not delete the skill',
+  },
 });
 
-interface SkillEntry {
-  name: string;
-  description: string;
-}
-
-function SkillItem({ skill }: { skill: SkillEntry }) {
+function SkillItem({ skill, onClick }: { skill: SourceEntry; onClick: () => void }) {
+  const intl = useIntl();
+  const isEditable = skill.writable !== false;
   return (
-    <Card className="py-2 px-4 mb-2 bg-background-primary border-none hover:bg-background-secondary transition-all duration-150">
+    <Card
+      onClick={onClick}
+      className={`py-2 px-4 mb-2 bg-background-primary border-none transition-all duration-150 ${
+        isEditable ? 'hover:bg-background-secondary cursor-pointer' : 'opacity-80'
+      }`}
+    >
       <div className="flex justify-between items-center gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
@@ -141,54 +206,93 @@ function SkillItem({ skill }: { skill: SkillEntry }) {
           </div>
           <p className="text-text-secondary text-sm line-clamp-2">{skill.description}</p>
         </div>
+        {!isEditable && (
+          <Lock
+            className="w-3.5 h-3.5 text-text-secondary shrink-0"
+            aria-label={intl.formatMessage(i18n.readOnlySkill)}
+          />
+        )}
       </div>
     </Card>
   );
 }
 
-function CreateSkillModal({
+function SkillFormModal({
   open,
   onOpenChange,
-  onCreated,
+  onSaved,
+  skill,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: () => void;
+  onSaved: () => void;
+  skill?: SourceEntry | null;
 }) {
   const intl = useIntl();
+  const isEdit = Boolean(skill);
   const [title, setTitle] = useState('');
   const [when, setWhen] = useState('');
   const [instructions, setInstructions] = useState('');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
-  const slug = skillNameFromTitle(title);
+  useEffect(() => {
+    if (open) {
+      setTitle(skill?.name ?? '');
+      setWhen(skill?.description ?? '');
+      setInstructions(skill?.content ?? '');
+    }
+  }, [open, skill]);
+
+  const slug = isEdit ? (skill?.name ?? '') : skillNameFromTitle(title);
   const canSave = slug.length > 0 && when.trim().length > 0 && instructions.trim().length > 0;
-
-  const reset = () => {
-    setTitle('');
-    setWhen('');
-    setInstructions('');
-  };
+  const busy = saving || deleting;
 
   const handleSave = async () => {
-    if (!canSave || saving) return;
+    if (!canSave || busy) return;
     setSaving(true);
     try {
-      const source = await createGlobalSkill(slug, when.trim(), instructions.trim());
+      const source =
+        isEdit && skill
+          ? await updateGlobalSkill(skill.path, skill.name, when.trim(), instructions.trim())
+          : await createGlobalSkill(slug, when.trim(), instructions.trim());
       toastSuccess({
-        title: intl.formatMessage(i18n.createdTitle),
-        msg: intl.formatMessage(i18n.createdMsg, { name: source.name }),
+        title: intl.formatMessage(isEdit ? i18n.updatedTitle : i18n.createdTitle),
+        msg: intl.formatMessage(isEdit ? i18n.updatedMsg : i18n.createdMsg, {
+          name: source.name,
+        }),
       });
-      reset();
       onOpenChange(false);
-      onCreated();
+      onSaved();
     } catch (err) {
       toastError({
-        title: intl.formatMessage(i18n.createFailed),
-        msg: errorMessage(err, 'Failed to create skill'),
+        title: intl.formatMessage(isEdit ? i18n.updateFailed : i18n.createFailed),
+        msg: errorMessage(err, isEdit ? 'Failed to update skill' : 'Failed to create skill'),
       });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!skill || busy) return;
+    if (!window.confirm(intl.formatMessage(i18n.deleteConfirm))) return;
+    setDeleting(true);
+    try {
+      await deleteGlobalSkill(skill.path);
+      toastSuccess({
+        title: intl.formatMessage(i18n.deletedTitle),
+        msg: intl.formatMessage(i18n.deletedMsg, { name: skill.name }),
+      });
+      onOpenChange(false);
+      onSaved();
+    } catch (err) {
+      toastError({
+        title: intl.formatMessage(i18n.deleteFailed),
+        msg: errorMessage(err, 'Failed to delete skill'),
+      });
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -196,9 +300,13 @@ function CreateSkillModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[560px]">
         <DialogHeader>
-          <DialogTitle>{intl.formatMessage(i18n.createTitle)}</DialogTitle>
+          <DialogTitle>
+            {intl.formatMessage(isEdit ? i18n.editTitle : i18n.createTitle)}
+          </DialogTitle>
         </DialogHeader>
-        <p className="text-sm text-text-secondary">{intl.formatMessage(i18n.createIntro)}</p>
+        <p className="text-sm text-text-secondary">
+          {intl.formatMessage(isEdit ? i18n.editIntro : i18n.createIntro)}
+        </p>
         <div className="space-y-4 mt-2">
           <div className="space-y-1">
             <label htmlFor="skill-name" className="text-text-primary text-xs">
@@ -206,14 +314,21 @@ function CreateSkillModal({
             </label>
             <Input
               id="skill-name"
-              value={title}
+              value={isEdit ? slug : title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder={intl.formatMessage(i18n.fieldNamePlaceholder)}
+              disabled={isEdit}
             />
-            {slug && (
+            {isEdit ? (
               <p className="text-xs text-text-secondary">
-                {intl.formatMessage(i18n.fieldNameSavedAs, { slug })}
+                {intl.formatMessage(i18n.fieldNameReadonlyHint)}
               </p>
+            ) : (
+              slug && (
+                <p className="text-xs text-text-secondary">
+                  {intl.formatMessage(i18n.fieldNameSavedAs, { slug })}
+                </p>
+              )
             )}
           </div>
           <div className="space-y-1">
@@ -241,13 +356,28 @@ function CreateSkillModal({
             />
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
-            {intl.formatMessage(i18n.cancel)}
-          </Button>
-          <Button onClick={handleSave} disabled={!canSave || saving}>
-            {saving ? intl.formatMessage(i18n.saving) : intl.formatMessage(i18n.save)}
-          </Button>
+        <DialogFooter className={isEdit ? 'sm:justify-between' : undefined}>
+          {isEdit && (
+            <Button
+              variant="ghost"
+              onClick={handleDelete}
+              disabled={busy}
+              className="text-red-500 hover:text-red-600 hover:bg-red-500/10 flex items-center gap-1.5"
+            >
+              <Trash2 className="w-4 h-4" />
+              {deleting ? intl.formatMessage(i18n.deleting) : intl.formatMessage(i18n.deleteSkill)}
+            </Button>
+          )}
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+              {intl.formatMessage(i18n.cancel)}
+            </Button>
+            <Button onClick={handleSave} disabled={!canSave || busy}>
+              {saving
+                ? intl.formatMessage(i18n.saving)
+                : intl.formatMessage(isEdit ? i18n.saveChanges : i18n.save)}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -269,13 +399,14 @@ function SkillSkeleton() {
 
 export default function SkillsView() {
   const intl = useIntl();
-  const [skills, setSkills] = useState<SkillEntry[]>([]);
+  const [skills, setSkills] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [showSkeleton, setShowSkeleton] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showContent, setShowContent] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingSkill, setEditingSkill] = useState<SourceEntry | null>(null);
 
   const filteredSkills = useMemo(() => {
     if (!searchTerm) return skills;
@@ -294,11 +425,7 @@ export default function SkillsView() {
       setShowContent(false);
       setError(null);
       const sources = await listSkillSources(getInitialWorkingDir());
-      const skillEntries: SkillEntry[] = sources.map((source) => ({
-        name: source.name,
-        description: source.description,
-      }));
-      setSkills(skillEntries);
+      setSkills(sources);
     } catch (err) {
       setError(errorMessage(err, 'Failed to load skills'));
     } finally {
@@ -369,7 +496,13 @@ export default function SkillsView() {
     return (
       <div className="space-y-2">
         {filteredSkills.map((skill) => (
-          <SkillItem key={skill.name} skill={skill} />
+          <SkillItem
+            key={skill.path}
+            skill={skill}
+            onClick={() => {
+              if (skill.writable !== false) setEditingSkill(skill);
+            }}
+          />
         ))}
       </div>
     );
@@ -417,10 +550,18 @@ export default function SkillsView() {
           </ScrollArea>
         </div>
       </div>
-      <CreateSkillModal
+      <SkillFormModal
         open={showCreateModal}
         onOpenChange={setShowCreateModal}
-        onCreated={loadSkills}
+        onSaved={loadSkills}
+      />
+      <SkillFormModal
+        open={Boolean(editingSkill)}
+        onOpenChange={(open) => {
+          if (!open) setEditingSkill(null);
+        }}
+        onSaved={loadSkills}
+        skill={editingSkill}
       />
     </MainPanelLayout>
   );

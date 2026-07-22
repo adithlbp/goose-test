@@ -4,28 +4,26 @@ set -eu
 ##############################################################################
 # Genius Assistant — instalador corporativo (macOS / Linux)
 #
-# Flujo no interactivo (prompt 08):
-#   1. Instala el build corporativo (Desktop .app o CLI vía download_cli.sh).
-#   2. Coloca la política adversary.md en el config dir del usuario.
-#   3. Provisiona el API token vía ACP → Keychain (goose acp; el helper nunca
-#      toca el Keychain). GATEADO por el invariante I5 (binario congelado): la
-#      ACL del Keychain se ata al hash del binario, así que solo se provisiona
-#      si el binario instalado ES el build bendecido — ver
-#      docs/prompts/07_SECURITY_APIKEY.md y docs/SECRET_LIFECYCLE.md (I5).
+# NO requiere Python en la máquina del usuario: descifra el token con openssl
+# (nativo en macOS) y lo provisiona manejando `goose acp` (JSON-RPC) por pipe.
 #
-# Variables (todas por entorno; NUNCA hardcodear el token en este archivo —
-# lección "Genius Code"):
+# Flujo no interactivo:
+#   1. Instala el build corporativo en ~/Applications (no requiere admin).
+#   2. Coloca la política adversary.md en el config dir del usuario.
+#   3. Provisiona el API token vía ACP → Keychain (el script nunca toca el
+#      Keychain; lo hace goose). GATEADO por el invariante I5 (binario congelado).
+#
+# Variables (todas por entorno; NUNCA hardcodear el token — lección "Genius Code"):
 #   GENIUS_MODE           - desktop (default) | cli
 #   GENIUS_REPO           - repo interno del fork (owner/name) [cli]
 #   GENIUS_DESKTOP_URL    - URL del zip de la .app corporativa [desktop]
+#   GENIUS_DESKTOP_ZIP    - ruta a un zip local ya descargado (alternativa al URL)
 #   GENIUS_MODEL          - modelo del gateway [cli]
-#   GENIUS_TOKEN          - token único por plataforma (canal seguro)
-#   GENIUS_SECRET_KEY     - nombre del secreto (default: CUSTOM_GENIUS_API_KEY;
-#                           usar OPENAI_API_KEY si el bundle no usa
-#                           GOOSE_CUSTOM_PROVIDER)
+#   GENIUS_TOKEN          - token en claro (SOLO pruebas; en producción viene en
+#                           genius_token.enc, generado con embed_token.sh)
+#   GENIUS_SECRET_KEY     - nombre del secreto (default: CUSTOM_GENIUS_API_KEY)
 #   GENIUS_ALLOW_UNVERIFIED - "true" para provisionar aunque el binario NO
-#                           coincida con el hash bendecido (escape hatch: asume
-#                           el riesgo de re-prompt del Keychain a conciencia)
+#                           coincida con el hash bendecido (asume el riesgo)
 ##############################################################################
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,14 +40,36 @@ case "$GENIUS_MODE" in
       echo "[error] GENIUS_MODE=desktop solo soporta macOS en este script." >&2
       exit 1
     fi
-    : "${GENIUS_DESKTOP_URL:?Set GENIUS_DESKTOP_URL to the internal .app zip URL}"
-    APP_DIR="/Applications/Genius Assistant.app"
-    TMP_ZIP="$(mktemp -t genius-assistant).zip"
-    echo "Descargando Genius Assistant Desktop..."
-    curl -fsSL "$GENIUS_DESKTOP_URL" -o "$TMP_ZIP"
+    # ~/Applications (del usuario): no requiere permisos de admin y evita el
+    # "Operation not permitted" de /Applications en Macs corporativas.
+    APPS_DIR="$HOME/Applications"
+    APP_DIR="$APPS_DIR/Genius Assistant.app"
+    if [ -n "${GENIUS_DESKTOP_ZIP:-}" ]; then
+      SRC_ZIP="$GENIUS_DESKTOP_ZIP"
+      CLEANUP_ZIP=false
+      echo "Instalando desde archivo local: $SRC_ZIP"
+    elif [ -n "${GENIUS_DESKTOP_URL:-}" ]; then
+      SRC_ZIP="$(mktemp -t genius-assistant).zip"
+      CLEANUP_ZIP=true
+      echo "Descargando Genius Assistant Desktop..."
+      curl -fsSL "$GENIUS_DESKTOP_URL" -o "$SRC_ZIP"
+    else
+      # Carpeta autocontenida: usar el zip que está junto a este script.
+      SRC_ZIP="$(find "$SCRIPT_DIR" -maxdepth 1 -name 'Genius Assistant*.zip' | head -1)"
+      if [ -z "$SRC_ZIP" ]; then
+        echo "[error] no encontré el zip de la app junto al script, ni GENIUS_DESKTOP_URL/ZIP." >&2
+        exit 1
+      fi
+      CLEANUP_ZIP=false
+      echo "Instalando desde el zip local: $SRC_ZIP"
+    fi
+    mkdir -p "$APPS_DIR"
     rm -rf "$APP_DIR"
-    ditto -xk "$TMP_ZIP" "/Applications"
-    rm -f "$TMP_ZIP"
+    ditto -xk "$SRC_ZIP" "$APPS_DIR"
+    [ "$CLEANUP_ZIP" = "true" ] && rm -f "$SRC_ZIP"
+    # App firmada adhoc: quitar la cuarentena de Gatekeeper (si el zip vino de
+    # navegador/Drive/AirDrop) para que abra sin "desarrollador no identificado".
+    xattr -dr com.apple.quarantine "$APP_DIR" 2>/dev/null || true
     GOOSE_BIN="$APP_DIR/Contents/Resources/bin/goose"
     ;;
   cli)
@@ -78,19 +98,75 @@ mkdir -p "$GOOSE_CONFIG_DIR"
 cp "$SCRIPT_DIR/adversary.md" "$GOOSE_CONFIG_DIR/adversary.md"
 echo "adversary.md instalado en $GOOSE_CONFIG_DIR"
 
-# --- 3) Provisionar el token (ACP → Keychain) ---
+# --- 2b) Branding del system prompt (override en <config>/prompts/system.md) ---
+# goose lee este override en runtime (prompt_template.rs) → el agente se identifica
+# como "Genius Assistant" sin recompilar el binario congelado (I5). El override es
+# un snapshot del system.md de v1.43.0; regenerarlo si el binario deja de estar
+# congelado.
+if [ -f "$SCRIPT_DIR/prompts/system.md" ]; then
+  mkdir -p "$GOOSE_CONFIG_DIR/prompts"
+  cp "$SCRIPT_DIR/prompts/system.md" "$GOOSE_CONFIG_DIR/prompts/system.md"
+fi
+
+# --- 3) Provisionar el token (ACP → Keychain), sin Python ---
 # Gate = invariante I5 (binario congelado), NO la firma: la ACL del Keychain se
-# ata al hash del binario, así que solo provisionamos si el binario instalado es
-# EXACTAMENTE un build bendecido (mismo hash → sin re-prompt en lecturas
-# futuras). El binario que provisiona DEBE ser el mismo que luego lee
-# (creador == consumidor de la ACL). build_corporate.sh genera un hash por
-# arquitectura: frozen_goose_darwin_arm64.sha256 / _x64.sha256. El instalado
-# debe coincidir con ALGUNO (así el mismo instalador sirve para arm64 e Intel).
+# ata al hash del binario → solo provisionamos si el binario instalado coincide
+# con ALGÚN hash bendecido (frozen_goose_darwin_{arm64,x64}.sha256). El token
+# viene "listo" en genius_token.enc (keyhex:ivhex:ct_b64, AES-256-CBC); se
+# descifra con openssl y se pasa a goose por stdin (nunca argv/ps).
+TOKEN_ENC="$SCRIPT_DIR/genius_token.enc"
+token_available() { [ -n "$GENIUS_TOKEN" ] || [ -f "$TOKEN_ENC" ]; }
+
+decode_token() {  # imprime el token; se captura en variable, nunca en argv
+  if [ -n "$GENIUS_TOKEN" ]; then
+    printf '%s' "$GENIUS_TOKEN"
+    return 0
+  fi
+  local key iv ct
+  IFS=: read -r key iv ct < "$TOKEN_ENC" || true
+  printf '%s' "$ct" | openssl enc -aes-256-cbc -d -K "$key" -iv "$iv" -a -A
+}
+
 provision_secret() {
-  # El token viaja por stdin (nunca argv: invisible a ps/historial).
-  printf '%s\n' "$GENIUS_TOKEN" | python3 "$SCRIPT_DIR/provision_secret.py" \
-    --goose "$GOOSE_BIN" --key "$GENIUS_SECRET_KEY" --token-stdin
-  echo "Secreto '$GENIUS_SECRET_KEY' provisionado vía ACP → Keychain."
+  local token esc init upsert fifo out gpid ok waited
+  token="$(decode_token)"
+  if [ -z "$token" ]; then
+    echo "[error] no se pudo obtener el token (¿genius_token.enc corrupto?)." >&2
+    return 1
+  fi
+  esc=${token//\\/\\\\}; esc=${esc//\"/\\\"}   # escape JSON
+  init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"v1","clientCapabilities":{},"clientInfo":{"name":"corp-helper","version":"1.0.0"}}}'
+  upsert="{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"_goose/unstable/config/upsert\",\"params\":{\"key\":\"$GENIUS_SECRET_KEY\",\"value\":\"$esc\",\"isSecret\":true}}"
+  # goose acp no cierra al recibir EOF → lo terminamos nosotros. NO usamos un
+  # `sleep` ciego: en el primer arranque el binario recién extraído tarda
+  # (Gatekeeper) y el Llavero puede pedir la contraseña; matar a los 2s abortaba
+  # la escritura → secreto vacío → 401. Esperamos la RESPUESTA del upsert
+  # (hasta ~60s, dando tiempo a aprobar el Llavero) y confirmamos que se guardó.
+  out="$(mktemp)"; fifo="$(mktemp -u)"; mkfifo "$fifo"
+  "$GOOSE_BIN" acp <"$fifo" >"$out" 2>/dev/null &
+  gpid=$!
+  exec 3>"$fifo"                                   # mantener stdin abierto mientras esperamos
+  printf '%s\n%s\n' "$init" "$upsert" >&3
+  ok=false; waited=0
+  while [ "$waited" -lt 120 ]; do
+    if grep -q '"id":2' "$out" 2>/dev/null; then
+      grep -q '"id":2,"result"' "$out" 2>/dev/null && ok=true
+      break
+    fi
+    kill -0 "$gpid" 2>/dev/null || break
+    sleep 0.5; waited=$((waited + 1))
+  done
+  exec 3>&-
+  kill "$gpid" 2>/dev/null || true
+  wait "$gpid" 2>/dev/null || true
+  rm -f "$fifo" "$out"
+  if [ "$ok" = true ]; then
+    echo "  ✓ token provisionado en el Llavero."
+  else
+    echo "[error] el token NO quedó guardado (timeout, o se denegó el Llavero)." >&2
+    echo "  Vuelve a correr el instalador y dale 'Permitir' cuando pida la contraseña." >&2
+    return 1
+  fi
 }
 
 ACTUAL_HASH="$(shasum -a 256 "$GOOSE_BIN" | cut -d' ' -f1)"
@@ -105,8 +181,8 @@ for hf in "$SCRIPT_DIR"/frozen_goose_darwin_*.sha256; do
   fi
 done
 
-if [ -z "$GENIUS_TOKEN" ]; then
-  echo "[aviso] GENIUS_TOKEN vacío — provisioning omitido."
+if ! token_available; then
+  echo "[aviso] sin token (ni GENIUS_TOKEN ni genius_token.enc) — provisioning omitido."
 elif [ "$BLESSED_MATCH" = "true" ]; then
   provision_secret
 elif [ "$GENIUS_ALLOW_UNVERIFIED" = "true" ]; then
@@ -127,4 +203,4 @@ else
   echo "  GENIUS_ALLOW_UNVERIFIED=true." >&2
 fi
 
-echo "Instalación completada."
+echo "Instalación completada. Abre 'Genius Assistant' desde ~/Applications (Launchpad)."

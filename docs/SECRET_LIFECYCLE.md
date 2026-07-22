@@ -3,7 +3,9 @@
 > Documenta alta, lectura, actualización del binario, reinstalación,
 > desinstalación, revocación y casos de borde del token corporativo.
 > Complementa `prompts/07_SECURITY_APIKEY.md`, `SPIKE_RESULTS.md` y
-> `CHANGES_REVIEW.md`. Fecha: 2026-07-18.
+> `CHANGES_REVIEW.md`. Fecha: 2026-07-18; actualizado 2026-07-21 (token embebido
+> ofuscado en `genius_token.enc`, ver §2.1; provisioning **sin Python** —
+> openssl/.NET + `goose acp` por pipe; instalación en `~/Applications`).
 
 ## 1. Dónde vive el secreto
 
@@ -19,20 +21,59 @@
 ## 2. Alta (provisioning — instalador)
 
 ```
-installer → provision_secret.py → spawn "goose acp" (stdio JSON-RPC)
+genius_token.enc (ofuscado, junto al instalador)
+   │  decode: openssl (macOS) / .NET AES (Windows)  — SIN Python
+   ▼
+install_genius.{sh,ps1} → pipe JSON-RPC a "goose acp" (stdio)
           → initialize
           → _goose/unstable/config/upsert {key, value, isSecret:true}
           → Config::set_secret() → Keychain/CredMan
 ```
 
-- El helper **nunca** toca el Keychain directamente; siempre persiste Goose.
+- El instalador **nunca** toca el Keychain directamente; siempre persiste Goose.
+- **Sin Python en la máquina del usuario**: el descifrado usa `openssl` (nativo en
+  macOS) o .NET (nativo en PowerShell); el provisioning maneja `goose acp` por pipe
+  (bash: FIFO + kill; PowerShell: `Process` con stdin). El token va por stdin, nunca argv.
 - **Orden crítico**: provisionar **antes del primer arranque** de la app — el
   primer arranque crea el provider "Genius" y enlaza el secreto solo si ya existe
   (update `requires_auth:true` sin `api_key`, `acp/server/providers.rs:612-623`).
 - **Identidad crítica (macOS)**: el binario `goose` que ejecuta el upsert debe ser
   **el mismo** que luego lee (`Contents/Resources/bin/goose` de la .app instalada),
-  porque la ACL del item queda atada a esa identidad de firma (§4).
+  porque la ACL del item queda atada a esa identidad de firma (§4). El instalador
+  lo garantiza verificando el hash contra `frozen_goose_darwin_{arm64,x64}.sha256`
+  (gate I5) antes de provisionar.
 - El upsert es **idempotente**: re-ejecutar sobrescribe el valor sin duplicar.
+
+### 2.1 De dónde sale el token — embebido y ofuscado (dos capas)
+
+El token **viene listo en el instalable**; el usuario no teclea nada. Dos paquetes
+separados evitan compartir el token con quien compila:
+
+| Paquete | Quién lo arma | ¿Lleva token? |
+|---|---|---|
+| **App bundle** (`.zip`/`.app`/`.exe`) | Colega Windows / CI / build local | **No** |
+| **Instalable final** (llega al usuario) | Dueño del token, aparte | **Sí** — `genius_token.enc` |
+
+- **Generación** (dueño del token, una vez): `embed_token.sh` lee el token por
+  **stdin** (nunca argv) y escribe `installer/genius_token.enc` (chmod 600).
+  Formato: `keyhex:ivhex:ciphertext_b64` — **AES-256-CBC** con clave/IV aleatorios
+  (via `openssl`). No requiere Python.
+- **Selección de fuente** en `install_genius.{sh,ps1}`: si existe `genius_token.enc`
+  lo descifra y provisiona; `GENIUS_TOKEN` (env) lo sobreescribe, reservado a
+  **pruebas manuales**.
+- **Cadena sin texto plano**: en el instalable el token no aparece con
+  `strings`/`grep`; en el install se descifra en memoria y viaja por stdin a goose
+  (nunca argv/consola); en reposo queda en Keychain/CredMan (§1).
+
+> ⚠ **Propiedad de seguridad real (no marketing):** `genius_token.enc` es
+> **ofuscación, no cifrado fuerte** — la clave (AES) viaja dentro del blob, así que un
+> insider decidido con el archivo **puede** recuperar el token. Es el riesgo ya
+> aceptado del piloto (token **único por-plataforma**, no por-usuario, monitoreado
+> y **revocable** — §7). Lo que sí elimina: exposición casual (`strings`/`grep`/
+> consola/argv). La única alternativa con protección real es **no** embeber el
+> token (provisioning en línea), que contradice "venir listo en el instalable".
+> `genius_token.enc` **nunca** se versiona (`.gitignore`) ni se comparte con quien
+> compila el app bundle.
 
 ## 3. Lectura en runtime
 
@@ -87,20 +128,19 @@ Borrar la .app **no** borra el secreto ni la config. Limpieza completa:
 
 ```bash
 # macOS
-python3 provision_secret.py --goose <binario> --key CUSTOM_GENIUS_API_KEY --remove   # antes de borrar la app
-# o, si la app ya no está:
 security delete-generic-password -s goose            # borra TODOS los secretos de goose
 rm -rf ~/.config/goose "~/Library/Application Support/Goose"
 ```
 
 ```powershell
-# Windows: Credential Manager → quitar la credencial genérica "goose"
-# o vía helper --remove antes de desinstalar; config en %APPDATA%\Block\goose
+# Windows: Credential Manager → quitar la credencial genérica "goose";
+# config en %APPDATA%\Block\goose
 ```
 
 > `security delete-generic-password -s goose` elimina el item completo (todos los
-> secretos de goose, no solo el del piloto). Correcto para offboarding; excesivo si
-> el usuario tiene otros secretos de goose — preferir el helper `--remove`.
+> secretos de goose, no solo el del piloto). Correcto para offboarding. Para borrar
+> **solo** la clave del piloto sin Python, usa un `goose acp` →
+> `_goose/unstable/config/remove {key:"CUSTOM_GENIUS_API_KEY", isSecret:true}` por pipe.
 
 ## 7. Revocación y rotación
 
@@ -109,10 +149,12 @@ El token es **único por plataforma** (decisión 2026-06-24), monitoreado y revo
 1. **Revocación** (compromiso/fin del piloto): se revoca **en el gateway (llm-gw)**
    — efecto inmediato en todos los clientes (401), sin tocar los endpoints.
    El secreto local queda huérfano (inofensivo); limpiar en el siguiente ciclo.
-2. **Rotación**: emitir token nuevo en el gateway → re-ejecutar el paso de
-   provisioning (mismo comando, nuevo `GENIUS_TOKEN`) en cada máquina — upsert
-   sobrescribe. Ventana de convivencia de ambos tokens en el gateway recomendada.
-   Mientras el binario no cambie, la rotación **no** dispara prompts (misma identidad).
+2. **Rotación**: emitir token nuevo en el gateway → regenerar `genius_token.enc`
+   con `embed_token.sh` (nuevo token por stdin) → redistribuir el instalable y
+   re-ejecutar el install en cada máquina (upsert sobrescribe). Para una sola
+   máquina de prueba basta `GENIUS_TOKEN=<nuevo> ./install_genius.sh`. Ventana de
+   convivencia de ambos tokens en el gateway recomendada. Mientras el binario no
+   cambie, la rotación **no** dispara prompts (misma identidad).
 3. **Detección**: el gateway debe alertar sobre uso anómalo del token de plataforma
    (volumen, IPs fuera de rango corporativo).
 
@@ -143,7 +185,7 @@ El token es **único por plataforma** (decisión 2026-06-24), monitoreado y revo
 
 | # | Invariante | Cómo verificarlo |
 |---|---|---|
-| I1 | Secreto presente y enmascarable | `provision_secret.py --read-only` → valor enmascarado **no nulo** |
+| I1 | Secreto presente | `security find-generic-password -s goose` (macOS) / Credential Manager (Windows) muestra el item |
 | I2 | Secreto en el almacén del SO, no en disco | `~/.config/goose/secrets.yaml` **no existe**; `security find-generic-password -s goose` → item presente (macOS) |
 | I3 | Provider enlazado al secreto | `custom_providers/custom_genius.json` contiene `"requires_auth": true` y `"api_key_env": "CUSTOM_GENIUS_API_KEY"` |
 | I4 | Provider activo correcto | `config.yaml` con provider activo `custom_genius` |
@@ -166,8 +208,9 @@ El token es **único por plataforma** (decisión 2026-06-24), monitoreado y revo
 ### 10.2 Procedimientos
 
 **P1 — Re-provisioning (idempotente, seguro repetir siempre):**
-ejecutar el paso 3 del instalador tal cual (`provision_secret.py` con la clave y
-el binario del bundle). El upsert sobrescribe sin duplicar. Verificar I1 e I2.
+re-ejecutar `install_genius.sh` (provisiona nativo, sin Python: descifra con
+openssl y hace upsert por `goose acp`). El upsert sobrescribe sin duplicar.
+Verificar I1 e I2.
 
 **P2 — Reset del enlace del provider (secreto intacto):**
 1. Cerrar la app. 2. Borrar `~/.config/goose/custom_providers/custom_genius.json`.
@@ -190,13 +233,14 @@ secretos de goose de la máquina — en el piloto solo existe el nuestro).
 que el primer arranque reconstruya. 4. Si tras esto I1 falla → **P1**.
 
 **P5 — Rotación de token:**
-emitir token nuevo en el gateway → **P1** con el valor nuevo. El enlace (I3) no
-cambia (mismo `api_key_env`); sin prompts mientras I5 se mantenga. Revocar el
-token anterior en el gateway tras la ventana de convivencia.
+emitir token nuevo en el gateway → regenerar `genius_token.enc` (`embed_token.sh`)
+y redistribuir, o para una máquina puntual `GENIUS_TOKEN=<nuevo> ./install_genius.sh`
+→ **P1**. El enlace (I3) no cambia (mismo `api_key_env`); sin prompts mientras I5
+se mantenga. Revocar el token anterior en el gateway tras la ventana de convivencia.
 
 ### 10.3 Verificación post-recuperación (siempre, en este orden)
 
-1. I1: `--read-only` → enmascarado no nulo.
+1. I1: item presente (`security find-generic-password -s goose` / CredMan).
 2. I2: sin `secrets.yaml`.
 3. I3: `grep '"requires_auth": true' custom_providers/custom_genius.json`.
 4. Humo funcional: abrir la app → chat de una línea contra el gateway → respuesta 200.

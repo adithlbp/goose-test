@@ -18,6 +18,10 @@ const i18n = defineMessages({
     id: 'recipeModelSelector.providerHint',
     defaultMessage: 'Leave empty to use the default provider configured in settings',
   },
+  providerLockedHint: {
+    id: 'recipeModelSelector.providerLockedHint',
+    defaultMessage: 'The provider is managed by your organization and cannot be changed.',
+  },
   selectProvider: {
     id: 'recipeModelSelector.selectProvider',
     defaultMessage: 'Select provider',
@@ -70,6 +74,7 @@ export const RecipeModelSelector = ({
   onModelChange,
 }: RecipeModelSelectorProps) => {
   const intl = useIntl();
+  const isProviderLockedByOrg = Boolean(window.appConfig?.get('GOOSE_LOCK_PROVIDER'));
   const [providerOptions, setProviderOptions] = useState<{ value: string; label: string }[]>([]);
   const [modelOptions, setModelOptions] = useState<
     { options: { value: string; label: string; provider: string }[] }[]
@@ -186,7 +191,7 @@ export const RecipeModelSelector = ({
           {intl.formatMessage(i18n.providerLabel)}
         </label>
         <p className="text-xs text-textSubtle mb-2">
-          {intl.formatMessage(i18n.providerHint)}
+          {intl.formatMessage(isProviderLockedByOrg ? i18n.providerLockedHint : i18n.providerHint)}
         </p>
         <Select
           options={providerOptions}
@@ -197,13 +202,16 @@ export const RecipeModelSelector = ({
           }
           onChange={handleProviderChange}
           placeholder={intl.formatMessage(i18n.selectProvider)}
-          isClearable
+          isClearable={!isProviderLockedByOrg}
+          isDisabled={isProviderLockedByOrg}
         />
       </div>
 
       <div>
         <div className="flex justify-between items-center mb-2">
-          <label className="block text-sm font-medium text-textStandard">{intl.formatMessage(i18n.modelLabel)}</label>
+          <label className="block text-sm font-medium text-textStandard">
+            {intl.formatMessage(i18n.modelLabel)}
+          </label>
           {isCustomModel && (
             <button
               onClick={() => {
@@ -217,9 +225,7 @@ export const RecipeModelSelector = ({
             </button>
           )}
         </div>
-        <p className="text-xs text-textSubtle mb-2">
-          {intl.formatMessage(i18n.modelHint)}
-        </p>
+        <p className="text-xs text-textSubtle mb-2">{intl.formatMessage(i18n.modelHint)}</p>
         {isCustomModel ? (
           <Input
             type="text"
