@@ -96,3 +96,40 @@ La lógica de matching está probada en el código (`unprefixed_tools`, tests de
 `should_review`). El **comportamiento vivo** —que el LLM efectivamente bloquee una
 escritura a `~/.ssh`— solo se confirma con la app corriendo contra un provider
 alcanzable (VPN corporativa). Registrar el resultado aquí cuando se ejecute.
+
+## Reescritura ALLOW-first (2026-08-18)
+
+Feedback del piloto: el adversary bloqueaba prácticamente todo el trabajo de
+terminal (Jira/Confluence/Workspace por curl, crear carpetas, editar archivos).
+Dos causas atacadas en la reescritura de `installer/adversary.md`:
+
+1. **Juez pequeño y conservador**: gemini-3.5-flash con reglas encabezadas por
+   BLOCK sobre-bloquea. La política ahora abre con `DEFAULT VERDICT: ALLOW`,
+   ejemplos explícitos de trabajo normal (mkdir/edit en HOME, curl a dominios
+   corporativos con token de env var) y cierra con "si ninguna regla BLOCK aplica
+   claramente: ALLOW". Las reglas BLOCK quedan numeradas y acotadas (credenciales,
+   sistema, persistencia, exfiltración a destinos no confiables, destructivo,
+   código remoto/escalación).
+2. **Hazard del parser** (`adversary_inspector.rs:349`): el veredicto se parsea
+   con `starts_with("BLOCK") || contains("\nBLOCK")` sobre el texto en mayúsculas.
+   Una respuesta ALLOW cuya explicación empiece una línea con "Block…" (p.ej.
+   "ALLOW\nBlocking rules not matched") se interpreta como **BLOCK falso**. La
+   política ahora impone formato estricto de salida: exactamente dos líneas,
+   verdicto en la 1, `Reason:` en la 2, y prohíbe la palabra BLOCK fuera del
+   verdicto. (Fix real sería en el parser, pero es `crates/` — fuera del fork.)
+
+Dominios confiables ampliados: se añadieron `*.services.coppel` (variante interna),
+`*.atlassian.net` + `api.atlassian.com` (las APIs de Jira/Confluence Cloud usan
+`api.atlassian.com`, no solo `coppelmx.atlassian.net`) y `*.googleusercontent.com`
+(descarga de contenido de Drive).
+
+Complemento en `installer/prompts/system.md` (sección "Blocked Tool Calls"): ante
+`"The user has declined to run this tool"`, el agente debe explicar que fue la
+política de seguridad corporativa —no el usuario— y ofrecer alternativa, en vez de
+confabular "lo cancelaste" (ver memoria del incidente 2026-07-21).
+
+Despliegue: `adversary.md` viaja como recurso del bundle y se re-sincroniza al
+config dir en cada arranque (`main.ts::syncBundledAdversaryPolicy`, solo app
+empaquetada) → **requiere re-empaquetar** los instalables. Se re-lee una vez por
+sesión → chat nuevo o reinicio tras actualizar. `system.md` se copia por el
+instalador y se re-lee por turno.
