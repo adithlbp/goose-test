@@ -8,7 +8,8 @@
 > (instalables macOS arm64+Intel; token embebido ofuscado; **fix del 401**
 > —provisioning robustecido—; default `gemini-3.5-flash`; skills CRUD; provider
 > bloqueado en recetas; self-branding del agente vía override de `system.md`;
-> postura de escritura del adversary = HOME permitido; handoff Windows).
+> postura de escritura del adversary = HOME permitido; whitelist de dominios;
+> **instalable de Windows generado** (no-admin, wrapper `install.cmd`). Últ.: 2026-07-22.
 
 ## Principio de diseño (la regla que guió todo)
 
@@ -34,7 +35,7 @@ SecretStorage, registro de providers, resolución de secretos). Todo el diff viv
 | **Modelos dinámicos** | Picker trae la lista viva del gateway (`/v1/models`) con fallback estático | `acp/providers.ts`, `modelInterface.ts` | UI |
 | **Extensiones** | Modo "advertir" al conectar MCP externos | `vite.main.config.mts`, `installer/build_corporate.sh` | Bundle |
 | **Skills** | Formulario para **crear, editar y eliminar** skills (nombre/cuándo/instrucciones) para usuarios no técnicos; builtins read-only con candado | `skills/SkillsView.tsx`, `acp/sources.ts` | UI |
-| **Instaladores** | Wrappers corporativos + receta de build; repo apuntable por env | `installer/*`, `download_cli.sh`/`.ps1` | Scripts |
+| **Instaladores** | Wrappers corporativos + receta de build; repo apuntable por env; **instalación sin admin** (per-usuario) en macOS (`~/Applications`) y Windows (`%LOCALAPPDATA%`); wrapper `install.cmd` (doble clic, salta Execution Policy vía IEX) + acceso directo en menú Inicio | `installer/*`, `download_cli.sh`/`.ps1` | Scripts |
 
 ---
 
@@ -305,18 +306,163 @@ en el binario, la escritura alcanzaba dentro de los 2s.
 - **Textos "Ask goose" → "Genius Assistant":** botón de recuperación de errores
   (`toasts.tsx`, sin i18n) y descripciones de `AppsView.tsx`.
 
+## Instalable de Windows: sin admin + Execution Policy (2026-07-22)
+
+- **Generado end-to-end.** `goose.exe` compilado en una máquina Windows (Git Bash,
+  `build_corporate_windows.sh`; cargo MSVC + electron-forge win32). Baches típicos de
+  primera compilación en máquina nueva: falta **libclang** (bindgen → `winget install
+  LLVM.LLVM` + `LIBCLANG_PATH`), **CMake** (`winget install Kitware.CMake`), y Node/pnpm.
+  El ZIP de electron-forge (`Genius Assistant-win32-x64-1.43.0.zip`) ya trae
+  `resources\bin\goose.exe` → sirve igual que el "plano" del paso [4/4]; solo hay que
+  **renombrarlo** a `GeniusAssistant-win32-x64.zip` (sin espacios) para `package_for_testers.sh`.
+  El empaquetado final (agregar token + `_genius-setup.ps1` + adversary/prompts) se hace
+  **en el Mac** porque `genius_token.enc` vive solo ahí (gitignoreado).
+- **Sin permisos de administrador.** `_genius-setup.ps1` instala en `%LOCALAPPDATA%\
+  GeniusAssistant`, config en `%APPDATA%\Block\goose\config`, token en Credential Manager
+  — todo per-usuario. No toca `Program Files` ni `HKLM`. Se agregó **acceso directo en el
+  menú Inicio del usuario** (`%APPDATA%\...\Start Menu\Programs`, sin admin) — antes el
+  README decía "abre desde Inicio" pero no se creaba el shortcut.
+- **Execution Policy: el riesgo real de Windows corporativo.** En equipos bloqueados la
+  policy suele impedir correr `.ps1`. Se agregó **`install.cmd`** (doble clic) que corre
+  el instalador con `Invoke-Expression (Get-Content -Raw …)` — la Execution Policy aplica a
+  *archivos* `.ps1`, **no** a comandos vía `-Command`/IEX, así que funciona bajo
+  Restricted/AllSigned, incluso por GPO, y sin admin. El `.ps1` se hizo robusto a
+  `$ScriptDir` (usa `GENIUS_SCRIPT_DIR` que setea el `.cmd`, ya que corriendo como comandos
+  `$MyInvocation.MyCommand.Path` es null).
+  > **Caveat honesto:** el patrón `iex (gc …)` es justo lo que buscan los **antivirus/EDR**
+  > corporativos (técnica común de malware) — un EDR agresivo podría marcarlo aunque la
+  > Execution Policy lo permita. Bypass es por-proceso (cero riesgo de sistema; la Execution
+  > Policy no es barrera de seguridad per Microsoft), pero **la solución limpia y definitiva
+  > es firmar** (Azure Trusted Signing, ya en el workflow): quita SmartScreen, corre bajo
+  > AllSigned sin trucos y no lo marca el EDR. **Pendiente probar en una máquina real de
+  > Coppel** antes de repartir.
+
+## Bugs del piloto resueltos (2026-08-18)
+
+- **Selector de modelo muerto en chat nuevo.** Síntoma: en una conversación
+  recién abierta no se podía cambiar el modelo; solo funcionaba tras la primera
+  interacción. Causa raíz: en el Hub (chat sin sesión, `sessionId=null`) el cambio
+  va por `defaults/save`, y `on_defaults_save` (`crates/.../acp/server/config.rs`)
+  **valida el modelo contra el inventario estático** del provider — que para
+  `custom_genius` solo contiene `gemini-3.5-flash` (los custom providers no
+  refrescan inventario). El picker en cambio muestra la lista **viva** del gateway
+  (`supported-models`), así que cualquier otro modelo era rechazado con "Model 'X'
+  is not available". Con sesión activa el cambio usa `on_set_model`, que no valida
+  → por eso funcionaba después del primer mensaje. Fix (solo UI, cero `crates/`):
+  `saveDefaultsAcceptingLiveModel` en `ModelAndProviderContext.tsx` — si
+  `defaults/save` rechaza el modelo, actualiza la lista `models` del custom
+  provider vía el endpoint oficial de update (con `api_key:''` → conserva el
+  secreto del Keychain) y reintenta. Cubre Hub y Settings para cualquier modelo
+  que el gateway sirva.
+- **Adversary sobre-restrictivo (terminal bloqueada).** Reescritura ALLOW-first de
+  `installer/adversary.md` + formato de salida estricto (mitiga un hazard del
+  parser que convertía ALLOWs verbosos en BLOCK falso) + dominios confiables
+  ampliados (`*.services.coppel`, `*.atlassian.net`, `api.atlassian.com`,
+  `*.googleusercontent.com`), y sección "Blocked Tool Calls" en
+  `installer/prompts/system.md` para que el agente no confabule "el usuario lo
+  rechazó". Detalle completo en `ADVERSARY_POLICY.md` §"Reescritura ALLOW-first".
+  **Ambos fixes requieren re-empaquetar** (el diff es de UI/assets; el binario
+  congelado no cambia).
+
+- **El control de "Thinking effort" desaparecía al elegir modelo.** Síntoma: el
+  selector de esfuerzo de razonamiento se veía con el modelo por defecto, pero
+  desaparecía al seleccionar cualquier otro. Causa raíz: `showThinkingControl`
+  exige `reasoning === true`, y ese flag se resolvía **solo** contra el inventario
+  del provider (`fetchModelReasoning` → `acpListProviderModels`). Para
+  `custom_genius` el inventario contiene únicamente los modelos tecleados al
+  crearlo (`gemini-3.5-flash`) — el resto viene de la lista **viva** del gateway,
+  que devuelve `string[]` **sin metadatos**. Resultado: modelo default → hay
+  match → `reasoning=true` → control visible; cualquier otro → sin match →
+  `null` → control oculto. Es una interacción directa con el fix de modelos
+  dinámicos (adenda 2026-07-20b): al traer más modelos de los que el inventario
+  conoce, se destapó el hueco de metadatos. Fix (solo UI): `fetchModelReasoning`
+  cae al **registro canónico** (`providers/canonical-model-info`, ya expuesto por
+  el binario congelado) cuando el inventario no sabe del modelo. Ese registro
+  infiere el proveedor por el **nombre** (`gemini-*`→google, `claude*`→anthropic,
+  `gpt-*`→openai, `name_builder.rs:168`), así que resuelve los modelos del
+  gateway aunque vivan bajo `custom_genius`. Validado contra los datos embebidos
+  (`canonical_models.json`): las nueve variantes `google/gemini-3.x` presentes
+  traen `reasoning=true`.
+  > **Corregido el 2026-08-20 (caso `claude-opus-5`):** el registro canónico que
+  > trae el binario congelado v1.43.0 **está desactualizado** respecto al gateway
+  > — conoce `claude-opus-4.1`…`4.8`, `claude-sonnet-5` y `claude-haiku-4-5`
+  > (vía normalización de nombres), pero **no** `claude-opus-5` ni
+  > `gemini-3.5-pro`. Probado contra el binario real: para esos modelos
+  > `canonical-model-info` devuelve `null` → control oculto. **No es el
+  > gateway**: la UI nunca le pregunta al gateway por el soporte de razonamiento.
+  > Fix: replicar en la UI la heurística propia de upstream
+  > `ModelConfig::is_reasoning_model` (`crates/goose-provider-types/src/model.rs:228`
+  > + `is_openai_responses_model`, `formats/openai.rs:1507`) como último recurso
+  > cuando el registro no conoce el modelo: nombres con `claude`, `gemini-3*`, y
+  > el regex de OpenAI `o<N>`/`gpt-5`. Es la **misma** regla que el backend ya
+  > aplica al construir las peticiones, así que la UI deja de contradecirlo (el
+  > motor ya trataba a `claude-opus-5` como reasoning). Los modelos que el
+  > registro sí conoce siguen mandando su valor real, así que un modelo sin
+  > razonamiento no gana el control por error. Un alias corporativo que no
+  > matchee ninguna regla sigue sin control; ahí la salida es declararlo en el
+  > `models` del custom provider.
+
+**Re-empaquetado (2026-08-18):** ambos instalables de macOS regenerados y
+verificados — `dist-testers/macOS-AppleSilicon.zip` (187 MB) y
+`dist-testers/macOS-Intel.zip` (205 MB). Verificación del bundle: el
+`adversary.md` nuevo está en `Contents/Resources/`, y el fix de modelo se confirmó
+en `app.asar` por su forma **minificada** (`models:[...r,t]`), presente en el build
+nuevo y ausente en el de julio — el nombre `saveDefaultsAcceptingLiveModel` no
+sirve para grep porque el build de producción mangla identificadores.
+**Hallazgo útil (I5):** el hash del binario empaquetado es **idéntico** al del
+binario congelado (electron-forge copia `goose` como `extraResource` sin
+re-firmarlo) → `1a645dc3…f858e566` sin cambios, así que este update **no dispara
+re-prompts del Llavero** ni invalida el token ya provisionado en las máquinas de
+los testers (verificado en las dos arquitecturas: `1a645dc3…f858e566` arm64 y
+`b55bc0d8…abd28370` x64, ambos sin cambio). Pendiente: **Windows** (requiere
+máquina Windows para `goose.exe`; el ZIP de julio no lleva ninguno de los dos
+fixes).
+
+> **Trampa del empaquetado detectada en la práctica:** compilar con
+> `build_corporate.sh <arch>` **no** actualiza `dist-testers/` — son dos pasos.
+> Tras el build de Intel el `app.asar` de `out/` ya tenía el fix, pero
+> `dist-testers/macOS-Intel.zip` seguía siendo el de julio. Verificar siempre el
+> **mtime del zip en `dist-testers/`**, no el del build.
+
+## Build sin acceso a github.com (2026-08-20)
+
+En la máquina de dev, la red corporativa empezó a **bloquear `github.com` y
+`api.github.com`** (timeout; `registry.npmjs.org`, Google y
+`objects.githubusercontent.com` sí responden). Eso **rompe el empaquetado** de
+Electron aunque el binario ya esté en caché: `@electron/get` re-descarga
+**siempre** `SHASUMS256.txt` desde GitHub para validar el artefacto —
+`cacheMode: Bypass`, con el comentario explícito *"Never use the cache for
+loading checksums"* (`ui/node_modules/@electron/get/dist/cjs/index.js`). Falla
+todo el paso `Packaging application` con `connect ETIMEDOUT 140.82.114.4:443`.
+
+- **Solución (opt-in, cero cambio por defecto):** `GENIUS_OFFLINE_BUILD=true`
+  activa `cfg.download = { unsafelyDisableChecksums: true }` en
+  `forge.config.ts`, reutilizando el zip ya verificado de
+  `~/Library/Caches/electron` (están cacheados `electron-v41.0.0-darwin-arm64.zip`
+  y `-x64.zip`). Sin la variable, el build valida como siempre.
+  Uso: `GENIUS_OFFLINE_BUILD=true bash installer/build_corporate.sh arm64`.
+- **Trampa de diagnóstico (costó ~40 min):** lanzar el build con
+  `... | tail -6` hace que el código de salida observado sea el de `tail` (0),
+  no el del build (1) → un build fallido se reporta como exitoso y se queda uno
+  esperando un zip que nunca llega. **Redirigir a un log y leer `$?`**:
+  `bash installer/build_corporate.sh arm64 > build.log 2>&1; echo "EXIT=$?"`.
+
 ## Pendientes (para cerrar antes/durante el piloto)
 
-1. **Firma Apple Developer ID (macOS)** — requisito de producción para que updates del
-   binario no re-pregunten en el Keychain. En la PoC se acepta binario congelado (I5)
-   + reset del secreto en updates. Windows: firma Azure Trusted Signing opcional (solo
-   evita SmartScreen; no bloquea provisioning), ZIP portable como upstream.
+1. **Firma de código (macOS y Windows)** — camino limpio para producción.
+   - *macOS*: Apple Developer ID + notarización → updates del binario no re-preguntan en
+     el Keychain. En la PoC se acepta binario congelado (I5) + reset del secreto en updates.
+   - *Windows*: **Azure Trusted Signing** (input `signing` del workflow). No es solo
+     cosmético: un `.exe`/`.ps1` firmado evita SmartScreen, corre bajo AllSigned **sin** el
+     truco de `install.cmd`, y **no lo marca el EDR**. Es la solución definitiva al
+     problema de Execution Policy/EDR del piloto.
 2. **Allowlist estricto de extensiones** (fase 2: host del YAML + URLs de los MCP +
    wildcard de dominios) si se quiere bloqueo real, no solo aviso.
 3. **Prueba E2E en VM limpia** contra el gateway real. Parcial hecho (2026-07-21):
    provisioning + lectura del token por el binario instalado + chat autenticado
    (HTTP 200) OK en la máquina de dev. Falta VM limpia + adversary bloqueando de
    verdad + modelos dinámicos.
-4. **Generar el ZIP de Windows** — en CI (`bundle-desktop-genius-windows.yml`), en
-   una VM, o con `installer/build_corporate_windows.sh` (Git Bash) delegando a
-   alguien con Windows — y **validar `install_genius.ps1`** (no reproducible en macOS).
+4. **Validar el instalable de Windows en una máquina real de Coppel** — el ZIP ya se
+   generó y empaquetó (ver "Instalable de Windows" arriba). Falta probar `install.cmd`
+   en un equipo corporativo real para ver si la **Execution Policy por GPO** y el **EDR**
+   lo dejan correr; si no, firmar (pendiente #1) o pedir excepción a TI.
