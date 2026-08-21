@@ -266,3 +266,34 @@ sin aviso (riesgo en cada rebase del fork). Alternativa: subcomando
 `Config::global().set_secret()`. Beneficios: contrato propio del fork, instalador
 sin JSON-RPC, elimina la exposición del token en `ps` (argv), exit codes limpios.
 Coste: diff propio a mantener en rebases. Estado: **pendiente de decisión**.
+
+## 11. Diagnóstico: "¿qué token está usando la app?" (2026-08-20)
+
+Dos helpers nuevos en `installer/`, para responderlo **sin exponer el token**:
+
+- **`verificar_token.sh`** — imprime (1) la *huella* del token embebido en
+  `genius_token.enc` (longitud, prefijo de 6, sha256 corto; lo descifra en
+  memoria) y (2) el valor **enmascarado** que la app instalada tiene en el
+  Llavero, vía `goose acp` + `config/read {isSecret:true}`. Comparar el prefijo
+  dice si el Llavero trae el token del instalador u otro provisionado a mano.
+- **`set_token.sh`** — rota el token embebido: lo pide de forma **oculta**
+  (`stty -echo`) y lo pasa por stdin a `embed_token.sh`. No queda en el
+  historial del shell ni en `ps`. Envolver así evita la sintaxis
+  `read -rs` de bash, que **falla en zsh** (`not an identifier`).
+
+Dos trampas encontradas al escribirlos (mismas que documenta §9):
+
+1. **`goose acp` no cierra con EOF.** Un pipeline
+   `{ printf …; } | goose acp | while read` se **cuelga para siempre**. Hay que
+   usar FIFO + `kill` explícito, como `install_genius.sh`.
+2. **El ACP responde fuera de orden.** `defaults/read` contesta al instante,
+   mientras que `config/read` de un secreto puede tardar (dispara el diálogo del
+   Llavero). Esperar la respuesta *rápida* mata el proceso antes de que el
+   Llavero conteste → parece "no hubo respuesta" y **nunca aparece el diálogo**.
+   Hay que esperar el `"id"` del secreto.
+
+**Señal de instalación no configurada:** `defaults/read` → `{"providerId":null,
+"modelId":null}` junto con un `~/.config/goose/` sin `config.yaml` significa que
+esa máquina nunca completó el arranque de la app (el provider `custom_genius` se
+crea en el primer lanzamiento). Útil para no confundir "token equivocado" con
+"máquina donde no se está probando".
