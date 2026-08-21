@@ -42,6 +42,14 @@ let cfg = {
   },
 };
 
+// Offline packaging. @electron/get always re-downloads SHASUMS256.txt from
+// github.com to verify the Electron artifact, even on a cache hit, so the
+// package step fails outright on networks that block github.com. Opt in to
+// reuse the already-verified zip from the local Electron cache.
+if (process.env.GENIUS_OFFLINE_BUILD === 'true') {
+  cfg.download = { unsafelyDisableChecksums: true };
+}
+
 // macOS code signing and notarization via Electron Forge
 // Activated when APPLE_TEAM_ID is set (CI signing builds)
 if (process.env.APPLE_TEAM_ID) {
