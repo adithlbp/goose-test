@@ -128,7 +128,7 @@ jobs:
         shell: bash
         run: |
           # El ZIP debe tener 'Genius Assistant.exe' + 'resources/' en la RAÍZ:
-          # install_genius.ps1 busca resources\bin\goose.exe tras Expand-Archive.
+          # _genius-setup.ps1 busca resources\bin\goose.exe tras Expand-Archive.
           cd ui/desktop/dist-windows
           7z a -tzip "$GITHUB_WORKSPACE/GeniusAssistant-win32-x64.zip" .
 

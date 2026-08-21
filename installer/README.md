@@ -70,7 +70,7 @@ no cifrado — riesgo aceptado del piloto).
 Empaqueta y entrega (por plataforma) el app bundle **hospedado** + estos archivos juntos:
 
 ```
-install_genius.sh          (macOS/Linux)   |  install_genius.ps1   (Windows)
+install_genius.sh          (macOS/Linux)   |  install.cmd + _genius-setup.ps1  (Windows)
 adversary.md
 frozen_goose_darwin_arm64.sha256           (solo macOS)
 frozen_goose_darwin_x64.sha256             (solo macOS)
@@ -94,7 +94,7 @@ bash installer/package_for_testers.sh   # → dist-testers/{macOS-AppleSilicon,m
 ```
 
 El tester descarga la carpeta de su SO, la descomprime y corre `bash install_genius.sh`
-(o en Windows, `install_genius.ps1`) — el instalador **auto-detecta** el zip a su lado.
+(o en Windows, **doble clic en `install.cmd`**) — el instalador **auto-detecta** el zip a su lado.
 Requiere `genius_token.enc` ya generado (Paso 2).
 
 ---
@@ -114,7 +114,7 @@ GENIUS_DESKTOP_ZIP="/ruta/Genius Assistant.zip" ./install_genius.sh
 
 ```powershell
 # Windows
-$env:GENIUS_DESKTOP_URL="https://interno/GeniusAssistant-win32-x64.zip"; .\install_genius.ps1
+$env:GENIUS_DESKTOP_URL="https://interno/GeniusAssistant-win32-x64.zip"; .\_genius-setup.ps1
 ```
 
 Hace: instala la app en **`~/Applications`** (macOS, sin admin) → coloca `adversary.md`

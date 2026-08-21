@@ -31,6 +31,14 @@ readme_macos() {
   cat > "$1/README.md" <<'EOF'
 # Genius Assistant — Instalación (macOS)
 
+> ⚠️ **Versión de prueba (piloto interno).** Esta build **todavía no está firmada**
+> digitalmente — por eso macOS mostrará avisos de seguridad y pedirá la contraseña del
+> Llavero. Es **esperado** en esta fase; se resuelve cuando la app esté firmada.
+
+> 🔄 **¿Ya tenías Genius Assistant instalada?** No borres nada: el instalador
+> reemplaza la versión anterior y conserva tu configuración. Solo **cierra la app**
+> si la tienes abierta (el instalador intentará cerrarla por ti).
+
 1. Descomprime esta carpeta (doble clic en el `.zip`).
 2. Abre la app **Terminal**.
 3. Escribe `cd ` (con un espacio) y **arrastra esta carpeta** a la ventana; presiona **Enter**.
@@ -79,23 +87,39 @@ fi
 if [ -f "$WIN_ZIP" ]; then
   d="$OUT/Windows"; mkdir -p "$d"
   cp "$WIN_ZIP" "$d/"
-  cp "$INST/install_genius.ps1" "$d/"
+  cp "$INST/_genius-setup.ps1" "$d/"
+  cp "$INST/install.cmd" "$d/"
   for f in "${COMMON[@]}"; do cp "$INST/$f" "$d/"; done
   [ -d "$INST/prompts" ] && cp -R "$INST/prompts" "$d/"
   cat > "$d/README.md" <<'EOF'
 # Genius Assistant — Instalación (Windows)
 
+> ⚠️ **Versión de prueba (piloto interno).** Esta build **todavía no está firmada**
+> digitalmente — por eso Windows puede mostrar un aviso de **SmartScreen** (*Más
+> información → Ejecutar de todas formas*). Es **esperado** en esta fase; se resuelve
+> cuando la app esté firmada.
+
+> 🔄 **¿Ya tenías Genius Assistant instalada?** No borres nada: el instalador
+> reemplaza la versión anterior y conserva tu configuración. Solo **cierra la app**
+> si la tienes abierta (el instalador intentará cerrarla por ti).
+
 1. Descomprime esta carpeta (clic derecho → **Extraer todo**).
-2. Clic derecho en `install_genius.ps1` → **Ejecutar con PowerShell**.
-3. Abre **Genius Assistant** desde el menú Inicio.
+2. **Doble clic en `install.cmd`.** (Si Windows muestra un aviso de SmartScreen:
+   *Más información → Ejecutar de todas formas*.)
+3. Espera a que diga **"Instalación completada"** y cierra la ventana.
+4. Abre **Genius Assistant** desde el **menú Inicio**.
 
-> 🔑 **Almacenamiento seguro:** la configuración se guarda de forma segura en el
-> Administrador de credenciales de Windows. **No** te pedirá ninguna contraseña.
+> ✅ **No necesitas permisos de administrador** — todo se instala en tu carpeta de
+> usuario. **No** te pedirá contraseña (Windows guarda la configuración de forma
+> segura en el Administrador de credenciales).
 
-Si Windows lo bloquea, abre PowerShell en la carpeta y corre:
+**¿`install.cmd` no hace nada o se cierra solo?** Abre **PowerShell** en esta carpeta
+y corre:
 ```
-powershell -ExecutionPolicy Bypass -File install_genius.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iex (gc -Raw _genius-setup.ps1)"
 ```
+Si aun así falla, tu equipo tiene scripts bloqueados por política de dominio (GPO) —
+avísale al equipo de Genius Assistant para firmar el instalador o pedir excepción a TI.
 EOF
   echo "✓ Windows"
 else

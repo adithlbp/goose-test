@@ -19,7 +19,12 @@
 
 $ErrorActionPreference = "Stop"
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# $ScriptDir robusto: cuando el instalador se corre como COMANDOS (p.ej. el wrapper
+# install.cmd lo pasa por stdin para saltar la Execution Policy), $MyInvocation no
+# tiene ruta de archivo → usamos GENIUS_SCRIPT_DIR (que setea el .cmd) o el cwd.
+$ScriptDir = if ($env:GENIUS_SCRIPT_DIR) { $env:GENIUS_SCRIPT_DIR }
+             elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+             else { (Get-Location).Path }
 $Mode = if ($env:GENIUS_MODE) { $env:GENIUS_MODE } else { "desktop" }
 $SecretKey = if ($env:GENIUS_SECRET_KEY) { $env:GENIUS_SECRET_KEY } else { "CUSTOM_GENIUS_API_KEY" }
 $Token = $env:GENIUS_TOKEN
@@ -44,10 +49,33 @@ switch ($Mode) {
     else {
       # Carpeta autocontenida: usar el zip que está junto a este script.
       $localZip = Get-ChildItem -Path $ScriptDir -Filter "GeniusAssistant*.zip" -File | Select-Object -First 1
-      if (-not $localZip) { throw "No encontré el zip de la app junto al script, ni GENIUS_DESKTOP_URL/ZIP" }
+      if (-not $localZip) { throw "No encontre el zip de la app junto al script, ni GENIUS_DESKTOP_URL/ZIP" }
       $SrcZip = $localZip.FullName
       $CleanupZip = $false
       Write-Host "Instalando desde el zip local: $SrcZip"
+    }
+    # Windows bloquea los archivos en uso: si la app esta abierta, Remove-Item
+    # falla a media limpieza y deja la instalacion rota (a diferencia de macOS,
+    # donde borrar un bundle en ejecucion si funciona). Cerrarla primero.
+    if (Test-Path $AppDir) {
+      $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.Path -and $_.Path.StartsWith($AppDir, [System.StringComparison]::OrdinalIgnoreCase)
+      }
+      if ($running) {
+        Write-Host "Genius Assistant esta abierta; cerrandola para poder actualizarla..."
+        $running | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+        Start-Sleep -Seconds 3
+        Get-Process -ErrorAction SilentlyContinue | Where-Object {
+          $_.Path -and $_.Path.StartsWith($AppDir, [System.StringComparison]::OrdinalIgnoreCase)
+        } | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        $stillRunning = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+          $_.Path -and $_.Path.StartsWith($AppDir, [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        if ($stillRunning) {
+          throw "No pude cerrar Genius Assistant. Cierrala a mano y vuelve a correr el instalador."
+        }
+      }
     }
     if (Test-Path $AppDir) { Remove-Item -Recurse -Force $AppDir }
     Expand-Archive -Path $SrcZip -DestinationPath $AppDir
@@ -66,10 +94,10 @@ switch ($Mode) {
     $BinDir = if ($env:GOOSE_BIN_DIR) { $env:GOOSE_BIN_DIR } else { Join-Path $env:USERPROFILE "goose" }
     $GooseBin = Join-Path $BinDir "goose.exe"
   }
-  default { throw "GENIUS_MODE inválido: '$Mode' (desktop|cli)" }
+  default { throw "GENIUS_MODE invalido: '$Mode' (desktop|cli)" }
 }
 
-if (-not (Test-Path $GooseBin)) { throw "No se encontró el binario goose instalado en: $GooseBin" }
+if (-not (Test-Path $GooseBin)) { throw "No se encontro el binario goose instalado en: $GooseBin" }
 
 # --- 2) Política adversary.md ---
 $ConfigDir = Join-Path $env:APPDATA "Block\goose\config"
@@ -147,10 +175,28 @@ function Invoke-Provision([string]$tokenValue) {
 }
 
 if (-not $Token -and -not (Test-Path $TokenEnc)) {
-  Write-Host "[aviso] sin token (ni GENIUS_TOKEN ni genius_token.enc) — provisioning omitido."
+  Write-Host "[aviso] sin token (ni GENIUS_TOKEN ni genius_token.enc) - provisioning omitido."
 }
 else {
   Invoke-Provision (Get-GeniusToken)
 }
 
-Write-Host "Instalación completada. Abre Genius Assistant desde el menú Inicio."
+# Acceso directo en el menú Inicio del USUARIO (%APPDATA%\...\Start Menu\Programs) →
+# no requiere admin. Así "abrir desde Inicio" es verdad y el tester la encuentra.
+if ($Mode -eq "desktop") {
+  $Exe = Join-Path $AppDir "Genius Assistant.exe"
+  if (Test-Path $Exe) {
+    $StartMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+    New-Item -ItemType Directory -Force -Path $StartMenu | Out-Null
+    $Lnk = Join-Path $StartMenu "Genius Assistant.lnk"
+    $Ws = New-Object -ComObject WScript.Shell
+    $Sc = $Ws.CreateShortcut($Lnk)
+    $Sc.TargetPath = $Exe
+    $Sc.WorkingDirectory = $AppDir
+    $Sc.Save()
+  }
+}
+
+Write-Host ""
+Write-Host "Instalacion completada. Abre 'Genius Assistant' desde el menu Inicio."
+Write-Host "(o directamente: $AppDir\Genius Assistant.exe)"

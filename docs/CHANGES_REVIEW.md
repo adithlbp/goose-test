@@ -166,7 +166,7 @@ Precedencia env-first de `Config::get_param/get_secret` (upstream). No se tocó.
 
 ### [NUEVO] `installer/` — assets corporativos
 - [ ] `install_genius.sh` — macOS/Linux. Modo `desktop` (zip interno → `/Applications`; binario `Contents/Resources/bin/goose` = **misma identidad que crea y lee el item del Keychain**) o `cli` (delega en `download_cli.sh` con `CONFIGURE=false` — sin wizard — + `GOOSE_REPO` + `GOOSE_PROVIDER=openai`). Paso 2: `adversary.md` → `~/.config/goose/`. Paso 3: provisioning **gateado** por `GENIUS_SIGNING_READY=true` (mensaje explícito del bloqueo del 07); clave default `CUSTOM_GENIUS_API_KEY`.
-- [ ] `install_genius.ps1` — Windows equivalente; `adversary.md` → `%APPDATA%\Block\goose\config\`.
+- [ ] `_genius-setup.ps1` — Windows equivalente; `adversary.md` → `%APPDATA%\Block\goose\config\`.
 - **Token**: nunca en los scripts; llega por `GENIUS_TOKEN` (env, canal interno controlado); el helper lo pasa por stdin JSON-RPC a `goose acp`; jamás se persiste en claro (lección Genius Code). Token único por plataforma (decisión reunión 2026-06-24).
 
 **Verificado**: `bash -n` OK; dry-run en HOME aislado (fallo limpio sin URL ✓, adversary.md colocado ✓, gate `[GATED]` disparado ✓).
@@ -299,5 +299,5 @@ Precedencia env-first de `Config::get_param/get_secret` (upstream). No se tocó.
 - [ ] Decisión Developer ID (macOS) → firma estable + `osxSign`/`osxNotarize` (ya gated tras `APPLE_TEAM_ID`) + prueba build-A→build-B firmados. **Nota**: el gate del 08 ya NO depende de esto (se re-encuadró al hash I5, ver adenda 2026-07-21).
 - [ ] `pnpm run start-gui` — verificación visual (branding, locks, toggle seguridad).
 - [ ] E2E en VM limpia contra gateway real (onboarding saltado, chat autenticado, model picker con `/v1/models`).
-- [ ] Validar `install_genius.ps1` en Windows/pwsh.
+- [ ] Validar `_genius-setup.ps1` en Windows/pwsh.
 - [x] Receta de build corporativo: **hecha** — `installer/corporate_env.sh` (política única) + `build_corporate.sh [arm64|x64]` (macOS) + `build_corporate_windows.sh`/workflow (Windows). Ver adenda 2026-07-21.

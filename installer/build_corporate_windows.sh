@@ -9,7 +9,7 @@ set -eu
 # si prefieres que alguien con Windows lo genere a mano en vez de usar Actions.
 #
 # NO lleva secretos: el token se provisiona por-máquina al instalar
-# (install_genius.ps1), no se hornea. Por eso es seguro compartir el repo.
+# (_genius-setup.ps1), no se hornea. Por eso es seguro compartir el repo.
 #
 # En Windows NO se congela el binario (a diferencia de I5 en macOS): Credential
 # Manager es por-usuario y no ata ACL al hash → goose.exe se compila fresco.
@@ -19,7 +19,7 @@ set -eu
 #       + Visual Studio Build Tools (C++), que rustup pide al instalar
 #   - Node.js 24.x  y  pnpm 10.x        (npm install -g pnpm@10.30.3)
 #   - Git (trae Git Bash)  y  7-Zip (7z en el PATH)
-#   (El instalador install_genius.ps1 NO requiere Python: descifra con .NET.)
+#   (El instalador _genius-setup.ps1 NO requiere Python: descifra con .NET.)
 #
 # Uso (en Git Bash, desde cualquier carpeta):
 #   bash /ruta/al/repo/installer/build_corporate_windows.sh
@@ -70,7 +70,7 @@ node scripts/build-main.js
 node scripts/prepare-platform-binaries.js
 pnpm run make --platform=win32 --arch=x64
 
-# --- 4) Distribución plana + ZIP (contenido en la raíz para install_genius.ps1) ---
+# --- 4) Distribución plana + ZIP (contenido en la raíz para _genius-setup.ps1) ---
 echo "[4/4] Armando el ZIP portable..."
 APP_DIR="out/Genius Assistant-win32-x64"
 mkdir -p "$APP_DIR/resources/bin"

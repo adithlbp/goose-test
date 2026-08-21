@@ -63,6 +63,32 @@ case "$GENIUS_MODE" in
       CLEANUP_ZIP=false
       echo "Instalando desde el zip local: $SRC_ZIP"
     fi
+    # Si la app está abierta hay que cerrarla ANTES de reemplazar el bundle: el
+    # rm -rf borra los archivos bajo una instancia viva, que queda en un estado
+    # inconsistente (falla al cargar recursos y puede sobrescribir config al salir).
+    if pgrep -f "Genius Assistant.app/Contents/MacOS" >/dev/null 2>&1; then
+      echo "Genius Assistant está abierta; cerrándola para poder actualizarla..."
+      osascript -e 'quit app "Genius Assistant"' >/dev/null 2>&1 || true
+      waited=0
+      while [ "$waited" -lt 20 ]; do
+        pgrep -f "Genius Assistant.app/Contents/MacOS" >/dev/null 2>&1 || break
+        sleep 0.5; waited=$((waited + 1))
+      done
+      if pgrep -f "Genius Assistant.app/Contents/MacOS" >/dev/null 2>&1; then
+        echo "[error] no pude cerrar Genius Assistant. Ciérrala a mano y vuelve a correr" >&2
+        echo "  este instalador (si sigue abierta, la actualización queda a medias)." >&2
+        exit 1
+      fi
+    fi
+
+    # Instalaciones viejas (anteriores a ~/Applications) pueden haber quedado en
+    # /Applications: este instalador NO las toca y el usuario podría seguir
+    # abriendo la versión antigua por error.
+    if [ -d "/Applications/Genius Assistant.app" ]; then
+      echo "[aviso] hay una copia ANTIGUA en /Applications que este instalador no actualiza." >&2
+      echo "  Arrástrala a la papelera para no abrir la versión vieja por equivocación." >&2
+    fi
+
     mkdir -p "$APPS_DIR"
     rm -rf "$APP_DIR"
     ditto -xk "$SRC_ZIP" "$APPS_DIR"
