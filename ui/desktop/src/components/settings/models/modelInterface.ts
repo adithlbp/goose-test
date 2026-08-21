@@ -6,6 +6,7 @@ import {
 } from '../../../acp/providers';
 import type { ProviderDetails, ThinkingEffort } from '../../../types/providers';
 import { errorMessage as getErrorMessage } from '../../../utils/conversionUtils';
+import { fetchCanonicalModelInfo } from '../../../utils/canonical';
 
 export default interface Model {
   id?: number; // Make `id` optional to allow user-defined models
@@ -130,6 +131,26 @@ export async function fetchModelsForProviders(
   return await Promise.all(modelPromises);
 }
 
+// Mirrors ModelConfig::is_reasoning_model (crates/goose-provider-types/src/model.rs)
+// and is_openai_responses_model (formats/openai.rs) — the same heuristic the
+// backend applies when it builds requests. Needed because the canonical registry
+// bundled in the pinned binary predates newer models (e.g. it knows
+// claude-opus-4.8 and claude-sonnet-5 but not claude-opus-5), which would
+// otherwise hide the thinking controls for a model the backend does treat as
+// reasoning-capable.
+const OPENAI_RESPONSES_MODEL = /(?:^|[-/])(?:o\d+(?:$|-)|gpt-5(?:$|[-.]))/i;
+
+function looksLikeReasoningModel(model: string): boolean {
+  const name = model.toLowerCase();
+  return (
+    OPENAI_RESPONSES_MODEL.test(model) ||
+    name.includes('claude') ||
+    name.startsWith('gemini-3') ||
+    name.includes('/gemini-3') ||
+    name.includes('-gemini-3')
+  );
+}
+
 export async function fetchModelReasoning(
   provider: string,
   model: string,
@@ -138,8 +159,26 @@ export async function fetchModelReasoning(
   try {
     const models = await acpListProviderModels(provider);
     const match = models.find((m) => m.id === model);
-    return match?.reasoning ?? fallback ?? null;
+    if (match?.reasoning != null) {
+      return match.reasoning;
+    }
   } catch {
-    return fallback ?? null;
+    // Fall through to the canonical lookup below.
   }
+
+  if (fallback != null) {
+    return fallback;
+  }
+
+  // Models offered by a provider's live list are absent from the inventory, so
+  // they carry no reasoning metadata. The canonical registry resolves it from
+  // the model name (gemini-*, claude*, gpt-*), which is what the models served
+  // by a custom gateway need for the thinking controls to appear. Models the
+  // registry does not know fall back to the shared name heuristic below.
+  const canonical = await fetchCanonicalModelInfo(provider, model);
+  if (canonical) {
+    return canonical.reasoning;
+  }
+
+  return looksLikeReasoningModel(model) ? true : null;
 }

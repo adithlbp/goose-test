@@ -12,6 +12,7 @@ import {
   acpUpdateCustomProviderFromRequest,
   type AppliedSessionProviderModel,
 } from '../acp/providers';
+import { acpUpsertConfig } from '../acp/config';
 import type { UpdateCustomProviderRequest } from '../types/providers';
 import { errorMessage } from '../utils/conversionUtils';
 import {
@@ -127,6 +128,27 @@ async function setupBundledCustomProvider(
   return { model, provider: providerId };
 }
 
+// defaults/save validates the model against the provider's static inventory,
+// but the picker offers the live /v1/models list, so for a custom provider a
+// valid selection is rejected (verified: "Model 'X' is not available for
+// provider 'Y'"). config/upsert performs the same set_active_provider write
+// without that validation, and — unlike updating the provider's model list —
+// it touches neither the provider config nor its stored secret, so it triggers
+// no extra keychain read.
+async function saveDefaultsAcceptingLiveModel(
+  providerName: string,
+  modelName?: string | null
+): Promise<void> {
+  try {
+    await acpSaveDefaults(providerName, modelName);
+    return;
+  } catch (error) {
+    if (!modelName) throw error;
+    await acpUpsertConfig('GOOSE_PROVIDER', providerName);
+    await acpUpsertConfig('GOOSE_MODEL', modelName);
+  }
+}
+
 function patchAcpSessionProviderModel(
   sessionId: string,
   { providerId, modelId }: AppliedSessionProviderModel
@@ -174,7 +196,7 @@ export const ModelAndProviderProvider: React.FC<ModelAndProviderProviderProps> =
         // (i.e. changing from settings, not from within an existing chat)
         if (!sessionId) {
           phase = 'config';
-          await acpSaveDefaults(providerName, modelName);
+          await saveDefaultsAcceptingLiveModel(providerName, modelName);
         }
 
         if (!sessionId) {
